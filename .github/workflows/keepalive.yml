@@ -29,6 +29,7 @@ jobs:
           git diff --cached --quiet || (git commit -m "💓 keepalive [skip ci]" && git push)
       - name: ntfy ping
         env:
+          EUDIC_COOKIE: ${{ secrets.EUDIC_COOKIE }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python3 htf_engine.py keepalive

@@ -8,9 +8,6 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
-concurrency:
-  group: htf-rot-${{ matrix.shard }}
-  cancel-in-progress: false
 jobs:
   rotate:
     runs-on: ubuntu-latest
@@ -19,6 +16,9 @@ jobs:
       fail-fast: false
       matrix:
         shard: [0, 1]
+    concurrency:
+      group: htf-rot-${{ matrix.shard }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
