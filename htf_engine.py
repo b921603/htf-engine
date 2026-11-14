@@ -492,8 +492,39 @@ def compose_desc(title, lrc, rss_desc):
 def ffpath():
     p = shutil_ff()
     if not p:
-        sys.exit("✗ ffmpeg not found (GitHub runners ship it; local: install ffmpeg)")
+        p = ff_bootstrap()
+    if not p:
+        sys.exit("✗ ffmpeg not found and bootstrap download failed")
     return p
+
+
+def ff_bootstrap():
+    """Runner images may lack ffmpeg (ubuntu-26.04 dropped it) — fetch a
+    static build once per run (~40 MB, seconds on runners)."""
+    import tarfile, tempfile, urllib.request
+    tgt = os.path.join(tempfile.gettempdir(), "htf_ffmpeg", "ffmpeg")
+    if os.path.isfile(tgt):
+        return tgt
+    url = ("https://johnvansickle.com/ffmpeg/releases/"
+           "ffmpeg-release-amd64-static.tar.xz")
+    try:
+        log("ffmpeg missing — fetching static build …")
+        d = os.path.dirname(tgt)
+        os.makedirs(d, exist_ok=True)
+        t0 = os.path.join(d, "ff.tar.xz")
+        urllib.request.urlretrieve(url, t0)
+        with tarfile.open(t0) as tf:
+            for m in tf.getmembers():
+                if m.name.endswith("/ffmpeg"):
+                    with open(tgt, "wb") as f:
+                        f.write(tf.extractfile(m).read())
+                    break
+        os.chmod(tgt, 0o755)
+        log(f"ffmpeg ready: {tgt}")
+        return tgt
+    except Exception as e:
+        log(f"ffmpeg bootstrap failed: {e}")
+        return None
 
 
 def shutil_ff():
