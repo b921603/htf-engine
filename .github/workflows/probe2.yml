@@ -1,0 +1,56 @@
+name: htf-probe2
+# One-off: determine whether eudic WAF blocks ALL writes from GitHub runners
+# (Azure IPs) or only large multipart uploads. Read path is proven OK.
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: write probes
+        env:
+          EUDIC_COOKIE: ${{ secrets.EUDIC_COOKIE }}
+        run: |
+          python3 - <<'PY'
+          import os, time, requests
+          CK = os.environ["EUDIC_COOKIE"]
+          H = {"Cookie": CK, "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+               "X-Requested-With": "XMLHttpRequest",
+               "Referer": "https://my.eudic.net/ting/list"}
+          def timed(name, fn):
+              t0 = time.time()
+              try:
+                  r = fn()
+                  print(f"{name}: HTTP {r.status_code} in {time.time()-t0:.1f}s len={len(r.content)} body={r.text[:90]!r}")
+              except Exception as e:
+                  print(f"{name}: FAIL in {time.time()-t0:.1f}s {type(e).__name__} {str(e)[:110]}")
+
+          s = requests.Session(); s.headers.update(H)
+          # 1) baseline GET (known-good)
+          timed("GET  GetPrivateChannels", lambda: s.get("https://my.eudic.net/open/ting/GetPrivateChannels", timeout=30))
+          # 2) tiny POST — 1KB in-memory jpg via UploadTingFile
+          tiny = b"\xff\xd8\xff\xe0" + bytes(1000)
+          def up_tiny():
+              return s.post("https://my.eudic.net/open/ting/UploadTingFile",
+                            files={"file": ("t.jpg", tiny, "image/jpeg")}, timeout=40)
+          timed("POST UploadTingFile 1KB", up_tiny)
+          # 3) small JSON-ish form POST — GetPrivateMedias via POST (same endpoint family)
+          def post_medias():
+              return s.post("https://my.eudic.net/open/ting/GetPrivateMedias",
+                            data={"channelId": ""}, timeout=40)
+          timed("POST GetPrivateMedias", post_medias)
+          # 4) medium POST — 1MB body
+          med = tiny * 1000  # ~1MB
+          def up_med():
+              return s.post("https://my.eudic.net/open/ting/UploadTingFile",
+                            files={"file": ("m.jpg", med, "image/jpeg")}, timeout=60)
+          timed("POST UploadTingFile 1MB", up_med)
+          PY
