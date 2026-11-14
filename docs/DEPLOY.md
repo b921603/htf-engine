@@ -14,6 +14,8 @@
      - Contents: **Read and write**
      - Secrets: **Read and write**
      - Actions: **Read and write**
+     - Administration: **Read and write**（agent 代建 repo 需要）
+     - Workflows: **Read and write**（推送 `.github/workflows/*` 必需；GitHub 防外洩設計）
      - Metadata: Read-only（預設）
    - 產生後把 token 貼給 agent（對話或 ntfy）。
 3. agent 會自動完成：建 repo → 推送全部程式碼 → 設定兩個 secrets
