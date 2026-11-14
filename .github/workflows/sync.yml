@@ -50,6 +50,22 @@ jobs:
         with:
           path: state
           key: htf-state-${{ github.run_id }}
+      - name: notify on failure
+        if: failure()
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          python3 - <<'PY'
+          import json, requests, os
+          rid = os.environ.get("RUN_ID", "unknown")
+          msg = {"topic": os.environ["NTFY_TOPIC"], "title": "HTF GA: sync failed",
+                 "priority": 4, "tags": ["rotating_light"],
+                 "message": ("GitHub Actions sync 失敗（run " + rid + "）。\n" +
+                             "查日誌：https://github.com/b921603/htf-sync/actions/run/" + rid +
+                             "\n常見原因：cookie 過期（同時會發 HTF GA: cookie expired）或上傳鏈路異常。")}
+          requests.post("https://ntfy.sh/", data=json.dumps(msg), timeout=20)
+          PY
       - name: commit audit ledger (public trail)
         run: |
           git config user.name "htf-bot"
