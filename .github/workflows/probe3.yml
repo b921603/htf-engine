@@ -1,0 +1,103 @@
+name: htf-probe3
+# Decisive write-path experiments on runners:
+#  1. BBR congestion control (sudo sysctl) — counters loss-induced window collapse
+#  2. real endpoint POST ladder 1KB/1MB/3MB (correct /ting/ paths this time)
+#  3. curl 12MB upload with trace-time → the actual throughput curve
+#  4. inspect the ting upload web page for OSS/chunked-upload machinery
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: enable BBR
+        run: |
+          sudo modprobe tcp_bbr || true
+          sudo sysctl -w net.core.default_qdisc=fq || true
+          sudo sysctl -w net.ipv4.tcp_congestion_control=bbr || true
+          sysctl net.ipv4.tcp_congestion_control net.ipv4.tcp_wmem || true
+      - name: upload ladder + page inspection + 12MB curve
+        env:
+          EUDIC_COOKIE: ${{ secrets.EUDIC_COOKIE }}
+        run: |
+          python3 - <<'PY'
+          import os, time, requests, re
+          CK = os.environ["EUDIC_COOKIE"]
+          H = {"Cookie": CK, "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+               "X-Requested-With": "XMLHttpRequest", "Referer": "https://my.eudic.net/ting/list"}
+          s = requests.Session(); s.headers.update(H)
+
+          def timed(name, fn):
+              t0 = time.time()
+              try:
+                  r = fn()
+                  dt = time.time()-t0
+                  kb = len(r.request.body or b"")/1024 if isinstance(r.request.body, bytes) else 0
+                  print(f"{name}: HTTP {r.status_code} in {dt:.1f}s ({kb/dt:.0f} KB/s eff) body[:100]={r.text[:100]!r}")
+                  return r
+              except Exception as e:
+                  print(f"{name}: FAIL in {time.time()-t0:.1f}s {type(e).__name__} {str(e)[:120]}")
+                  return None
+
+          def up(kind, nbytes, hdr=b"\xff\xd8\xff\xe0"):
+              data = hdr + bytes(nbytes)
+              return lambda: s.post("https://my.eudic.net/ting/UploadTingFile?type=" + kind,
+                                    files={"file": ("t.jpg", data, "image/jpeg")}, timeout=(30, 900))
+          timed("POST 1KB  thumb (real path)", up("thumb", 1024))
+          timed("POST 1MB  thumb", up("thumb", 1024*1024))
+          timed("POST 3MB  media", up("media", 3*1024*1024))
+
+          # inspect the upload page for OSS/chunked machinery
+          try:
+              ch = s.get("https://my.eudic.net/ting/GetPrivateChannels", timeout=30).json()
+              chans = ch.get("result") or ch.get("data") or []
+              cid = None
+              if chans and isinstance(chans, list):
+                  c0 = chans[0]
+                  cid = c0.get("channelId") or c0.get("id")
+              print("cid:", cid)
+              if cid:
+                  med = s.get(f"https://my.eudic.net/ting/GetPrivateMedias",
+                              params={"sortby": "time", "page": 1, "channelId": cid}, timeout=30)
+                  m = re.search(r'"(?:mediaId|id)"\s*:\s*"?([0-9a-fA-F-]{8,64})"?', med.text)
+                  mid = m.group(1) if m else ""
+                  print("sample mid:", mid)
+                  pg = s.get(f"https://my.eudic.net/Ting/upload?channelid={cid}&mediaid={mid}&itemType=0", timeout=30)
+                  html = pg.text
+                  open("upload_page.html", "w").write(html)
+                  print("page len:", len(html))
+                  for pat in (r'https?://[^"\'\s]*(?:oss|aliyun|myqcloud|qiniu|upyun|obs\.)[^"\'\s]*',
+                              r'uploadUrl[^,}]{0,120}', r'chunk[^,}]{0,60}', r'multipart[^,}]{0,60}',
+                              r'plupload[^"\']{0,40}', r'webuploader[^"\']{0,40}'):
+                      hits = sorted(set(re.findall(pat, html, re.I)))[:8]
+                      if hits: print("PATTERN", pat[:24], "→", hits)
+          except Exception as e:
+              print("page inspect fail:", type(e).__name__, str(e)[:120])
+          PY
+      - name: curl 12MB throughput curve
+        env:
+          EUDIC_COOKIE: ${{ secrets.EUDIC_COOKIE }}
+        run: |
+          python3 -c "
+          import sys
+          h = b'\xff\xd8\xff\xe0' + bytes(12*1024*1024)
+          open('/tmp/big.jpg','wb').write(h)"
+          curl -sS -o /tmp/resp12.txt -w 'HTTP %{http_code} | sent %{size_upload}B in %{time_total}s | avg %{speed_upload}B/s\n' \
+            --trace-time --trace-ascii /tmp/curl12.log --max-time 1500 \
+            -H "Cookie: $EUDIC_COOKIE" -H "X-Requested-With: XMLHttpRequest" \
+            -H "Referer: https://my.eudic.net/ting/list" \
+            -F "file=@/tmp/big.jpg;type=image/jpeg" \
+            "https://my.eudic.net/ting/UploadTingFile?type=media" || echo "curl exit $?"
+          echo "--- response:"; head -c 200 /tmp/resp12.txt 2>/dev/null; echo
+          echo "--- transfer speed samples (last 12):"
+          grep -oE '^[0-9:.-]+ => Send data|CURLOPT_[A-Z_]+|[0-9]+ *([0-9.]+[KMG]?) *+[0-9.]+[KMG]?' /tmp/curl12.log 2>/dev/null | tail -12 || true
+          grep -E 'Send data' /tmp/curl12.log | tail -3 || true
+          grep -oE '[0-9]+ +[0-9.]+[KM]? *' /tmp/curl12.log | tail -12 || true
