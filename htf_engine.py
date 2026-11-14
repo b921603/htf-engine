@@ -836,9 +836,11 @@ def job_rotate(shard="0/1", budget=None):
     n, m = (int(x) for x in shard.split("/"))
     cid = channel_cid()
     rc = rj(art_path("rotate_cache.json"), {})
-    # incremental self-bootstrap: fill ≤60 missing entries per run (~150s),
-    # so a fresh deployment completes its cache within ~8 hourly runs.
-    if os.environ.get("HTF_ROT_BOOTSTRAP", "1") == "1":
+    # incremental self-bootstrap: fill ≤40 missing entries per run (~150s on
+    # runners), so a fresh deployment completes its cache within ~8-11 hourly
+    # runs. Shard 0 only — both shards share the cache file, fetching in
+    # parallel would duplicate work and race the cache save.
+    if os.environ.get("HTF_ROT_BOOTSTRAP", "1") == "1" and n == 0:
         try:
             arts = list_articles(cid)
             miss = [t for t in sorted(arts) if t not in rc]

@@ -5,6 +5,11 @@ on:
   schedule:
     - cron: "23 * * * *"      # hourly (GitHub cron drifts a few minutes — fine)
   workflow_dispatch:
+    inputs:
+      force:
+        description: "Only process episodes whose title contains this (e.g. Sue Perkins). Bypasses done/match guards — creates a real duplicate; for supervised tests only."
+        required: false
+        default: ""
 permissions:
   contents: write
 concurrency:
@@ -31,7 +36,10 @@ jobs:
           EUDIC_COOKIE: ${{ secrets.EUDIC_COOKIE }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           HTF_BASE: ${{ github.workspace }}/state
-        run: python3 htf_engine.py sync
+        run: |
+          ARGS=""
+          if [ -n "${{ inputs.force }}" ]; then ARGS="--force '${{ inputs.force }}'"; fi
+          python3 htf_engine.py sync $ARGS
       - name: save state
         if: always()
         uses: actions/cache/save@v4
