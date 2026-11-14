@@ -1,0 +1,47 @@
+name: htf-sync
+# Hourly RSS diff → new episode → full pipeline (audio/transcode/subtitles/
+# intro/official-cover/create/verify/register-rotation) → ntfy notification.
+on:
+  schedule:
+    - cron: "23 * * * *"      # hourly (GitHub cron drifts a few minutes — fine)
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: htf-sync
+  cancel-in-progress: false
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: restore state (done/ledger/rotate_cache/…)
+        uses: actions/cache/restore@v4
+        with:
+          path: state
+          key: htf-state-${{ github.run_id }}
+          restore-keys: htf-state-
+      - name: run sync
+        env:
+          EUDIC_COOKIE: ${{ secrets.EUDIC_COOKIE }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          HTF_BASE: ${{ github.workspace }}/state
+        run: python3 htf_engine.py sync
+      - name: save state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: state
+          key: htf-state-${{ github.run_id }}
+      - name: commit audit ledger (public trail)
+        run: |
+          git config user.name "htf-bot"
+          git config user.email "actions@users.noreply.github.com"
+          mkdir -p trail && cp -f state/sync_ledger.jsonl trail/ 2>/dev/null || true
+          git add trail/sync_ledger.jsonl 2>/dev/null || true
+          git diff --cached --quiet || (git commit -m "ledger: run ${{ github.run_id }} [skip ci]" && git push)

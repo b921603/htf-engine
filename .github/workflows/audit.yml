@@ -1,0 +1,34 @@
+name: htf-audit
+# Monthly fidelity drift audit over the whole channel:
+# LRC line-count drift / visible timestamps / missing intro / missing cover fid.
+on:
+  schedule:
+    - cron: "3 4 1 * *"       # 04:03 UTC on the 1st
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - uses: actions/cache/restore@v4
+        with:
+          path: state
+          key: htf-state-audit-${{ github.run_id }}
+          restore-keys: htf-state-
+      - run: python3 htf_engine.py audit
+        env:
+          EUDIC_COOKIE: ${{ secrets.EUDIC_COOKIE }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          HTF_BASE: ${{ github.workspace }}/state
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: state
+          key: htf-state-audit-${{ github.run_id }}

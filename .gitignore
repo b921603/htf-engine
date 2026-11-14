@@ -1,0 +1,5 @@
+state/
+rotstate/
+__pycache__/
+*.mp3
+imgcache/

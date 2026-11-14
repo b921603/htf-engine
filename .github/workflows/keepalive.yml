@@ -1,0 +1,34 @@
+name: htf-keepalive
+# 6-hour silent liveness ping (ntfy prio 1 — no bell).
+# Missing pings > 8 h = engine down → go wake the agent.
+# The heartbeat commit also keeps the repo active (prevents the
+# "scheduled workflows disabled after 60 days of inactivity" rule).
+on:
+  schedule:
+    - cron: "37 */6 * * *"
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests
+      - name: heartbeat commit
+        run: |
+          git config user.name "htf-bot"
+          git config user.email "actions@users.noreply.github.com"
+          echo "💓 $(date -u '+%F %T') UTC run=${{ github.run_id }}" >> .heartbeat
+          tail -n 200 .heartbeat > .heartbeat.tmp && mv .heartbeat.tmp .heartbeat
+          git add .heartbeat
+          git diff --cached --quiet || (git commit -m "💓 keepalive [skip ci]" && git push)
+      - name: ntfy ping
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 htf_engine.py keepalive
