@@ -36,10 +36,14 @@ jobs:
           EUDIC_COOKIE: ${{ secrets.EUDIC_COOKIE }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           HTF_BASE: ${{ github.workspace }}/state
+          HTF_FORCE: ${{ inputs.force }}
         run: |
-          ARGS=""
-          if [ -n "${{ inputs.force }}" ]; then ARGS="--force '${{ inputs.force }}'"; fi
-          python3 htf_engine.py sync $ARGS
+          if [ -n "$HTF_FORCE" ]; then
+            echo "force mode: $HTF_FORCE"
+            python3 htf_engine.py sync --force "$HTF_FORCE"
+          else
+            python3 htf_engine.py sync
+          fi
       - name: save state
         if: always()
         uses: actions/cache/save@v4
