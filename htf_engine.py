@@ -127,12 +127,17 @@ def req(method, url, *, data=None, files=None, timeout=60, tries=6, auth_check=T
 
 
 def eudic_upload(kind, filename, payload, mime):
-    """UploadTingFile → {success, result, fileId}. kind ∈ thumb|media."""
+    """UploadTingFile → {success, fileId}. kind ∈ thumb|media.
+    GitHub runners sit far from eudic — measured uplink ~23 KB/s (Azure→CN),
+    so a 32 kbps episode (~12 MB) needs ~8-9 min: media gets a long per-try
+    socket timeout and fewer tries to fit the workflow budget."""
     files = {"file": (filename, payload, mime)}
-    for i in range(6):
+    big = kind != "thumb"
+    timeout, tries = (600, 3) if big else (180, 6)
+    for i in range(tries):
         try:
             r = req("POST", f"{EUDIC}/ting/UploadTingFile?type={kind}",
-                    files=files, timeout=180)
+                    files=files, timeout=timeout)
             j = json.loads(r.text or "{}")
             if j.get("success") and (j.get("fileId") or j.get("result")):
                 return j.get("fileId") or j.get("result").split("/")[-1]
