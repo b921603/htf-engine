@@ -1,0 +1,32 @@
+name: htf-probe
+# One-off connectivity probe (manual dispatch only): verifies the runner can
+# reach the two external sources the sync engine depends on (Megaphone RSS,
+# PodScripts transcripts). Eudic auth is exercised by keepalive/sync runs.
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: probe external endpoints
+        run: |
+          python3 - <<'PY'
+          import requests
+          for name, url in [
+              ("megaphone RSS", "https://feeds.megaphone.fm/howtofail"),
+              ("podscripts", "https://podscripts.co/podcasts/how-to-fail-with-elizabeth-day"),
+          ]:
+              try:
+                  r = requests.get(url, timeout=25, headers={"User-Agent": "Mozilla/5.0"})
+                  print(f"{name}: HTTP {r.status_code} len {len(r.content)}")
+              except Exception as e:
+                  print(f"{name}: FAIL {type(e).__name__} {str(e)[:120]}")
+          PY
