@@ -21,6 +21,11 @@ jobs:
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
+      - name: enable BBR
+        run: |
+          sudo modprobe tcp_bbr || true
+          sudo sysctl -w net.core.default_qdisc=fq || true
+          sudo sysctl -w net.ipv4.tcp_congestion_control=bbr || true
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
