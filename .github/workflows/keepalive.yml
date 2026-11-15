@@ -30,6 +30,9 @@ jobs:
       - name: ntfy ping
         env:
           EUDIC_COOKIE: ${{ secrets.EUDIC_COOKIE }}
+          EUDIC_USER: ${{ secrets.EUDIC_USER }}
+          EUDIC_PASS: ${{ secrets.EUDIC_PASS }}
+          GH_PAT: ${{ secrets.GH_PAT }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python3 htf_engine.py keepalive

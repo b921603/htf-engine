@@ -39,6 +39,9 @@ jobs:
       - name: run sync
         env:
           EUDIC_COOKIE: ${{ secrets.EUDIC_COOKIE }}
+          EUDIC_USER: ${{ secrets.EUDIC_USER }}
+          EUDIC_PASS: ${{ secrets.EUDIC_PASS }}
+          GH_PAT: ${{ secrets.GH_PAT }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           HTF_BASE: ${{ github.workspace }}/state
           HTF_FORCE: ${{ inputs.force }}
@@ -49,6 +52,16 @@ jobs:
           else
             python3 htf_engine.py sync
           fi
+      - name: finish AI subtitles (subsync finishing queue)
+        if: always()
+        env:
+          EUDIC_COOKIE: ${{ secrets.EUDIC_COOKIE }}
+          EUDIC_USER: ${{ secrets.EUDIC_USER }}
+          EUDIC_PASS: ${{ secrets.EUDIC_PASS }}
+          GH_PAT: ${{ secrets.GH_PAT }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          HTF_BASE: ${{ github.workspace }}/state
+        run: python3 htf_engine.py subsync
       - name: save state
         if: always()
         uses: actions/cache/save@v4
