@@ -1,0 +1,29 @@
+name: htf-login
+# Manual dispatch: password login → verify → update the EUDIC_COOKIE secret.
+# Also the standalone path used when a scheduled run reports an expired cookie
+# and auto_relogin needs a dedicated retry.
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  login:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: enable BBR
+        run: |
+          sudo modprobe tcp_bbr || true
+          sudo sysctl -w net.ipv4.tcp_congestion_control=bbr || true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: login and refresh secret
+        env:
+          EUDIC_USER: ${{ secrets.EUDIC_USER }}
+          EUDIC_PASS: ${{ secrets.EUDIC_PASS }}
+          GH_PAT: ${{ secrets.GH_PAT }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: python3 htf_engine.py login
