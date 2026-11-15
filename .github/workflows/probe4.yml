@@ -1,0 +1,47 @@
+name: htf-probe4
+# One-off: verify the 2026-11-15 policy engine on a runner — AI_RE, official
+# transcript parsing pipeline, login-form reachability, BatchAiSubtitle
+# endpoint shape, RSS transcript-tag presence.
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: policy self-test
+        env:
+          EUDIC_COOKIE: ${{ secrets.EUDIC_COOKIE }}
+        run: |
+          python3 - <<'PY'
+          import htf_engine as E
+          assert E.AI_RE.search("[00:01:02.500][00:01:05.100] hello"), "AI_RE"
+          assert not E.AI_RE.search("[00:01] hello"), "AI_RE false-positive"
+          print("AI_RE OK; SUB_SOURCE =", E.SUB_SOURCE, "| AI_WAIT =", E.AI_WAIT)
+          items = E.rss_items()
+          tagged = sum(1 for e in items if e.get("transcript"))
+          print("rss items:", len(items), "| podcast:transcript tagged:", tagged)
+          import requests as RQ
+          s = RQ.Session()
+          lp = s.get("https://dict.eudic.net/account/login",
+                     params={"returnUrl": "http://my.eudic.net/Account/Login"}, timeout=30)
+          print("login page:", lp.status_code,
+                "| form:", "input-username" in lp.text,
+                "| password:", 'name="Password"' in lp.text)
+          try:
+              r = s.post("https://my.eudic.net/ting/BatchAiSubtitle",
+                         data={"mediaIds": ["x"], "channelId": "y"},
+                         timeout=30, allow_redirects=False)
+              print("BatchAiSubtitle unauth probe:", r.status_code)
+          except Exception as ex:
+              print("BatchAiSubtitle probe FAIL:", type(ex).__name__, str(ex)[:80])
+          import nacl
+          cid = E.job_auth()
+          PY
