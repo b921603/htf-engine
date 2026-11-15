@@ -22,6 +22,7 @@ jobs:
       - run: pip install -r requirements.txt
       - name: login and refresh secret
         env:
+          EUDIC_COOKIE: ${{ secrets.EUDIC_COOKIE }}
           EUDIC_USER: ${{ secrets.EUDIC_USER }}
           EUDIC_PASS: ${{ secrets.EUDIC_PASS }}
           GH_PAT: ${{ secrets.GH_PAT }}
