@@ -260,17 +260,21 @@ def post_article(cid, mid, title, lrc, desc, thumb_fid, intros=""):
             "needAISubtitle": "false", "description": desc or "",
             "mediatype": "0", "intros": intros or "", "istiming": "false",
             "timing": "", "html": "", "insertImage": "true", "mdChapterId": ""}
-    for k in range(5):
+    for k in range(10):
         try:
             r = req("POST", f"{EUDIC}/ting/uploadprivatemedia", data=data, timeout=90)
             if r.status_code == 200 and '"code":200' in (r.text or "").replace(" ", ""):
                 return True
+            busy = "还在处理" in (r.text or "")
             log(f"  post try{k}: {r.status_code} {(r.text or '')[:80]}")
         except AuthError:
             raise
         except Exception as e:
+            busy = False
             log(f"  post try{k} err: {str(e)[:70]}")
-        time.sleep(10 + 10 * k)
+        # server still transcoding a freshly-created media: wait patiently —
+        # fast uploads (BBR) reach the edit step before the resource is ready
+        time.sleep(45 if busy else 10 + 10 * k)
     return False
 
 
