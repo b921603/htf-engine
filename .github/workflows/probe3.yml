@@ -27,6 +27,9 @@ jobs:
       - name: upload ladder + page inspection + 12MB curve
         env:
           EUDIC_COOKIE: ${{ secrets.EUDIC_COOKIE }}
+          EUDIC_USER: ${{ secrets.EUDIC_USER }}
+          EUDIC_PASS: ${{ secrets.EUDIC_PASS }}
+          GH_PAT: ${{ secrets.GH_PAT }}
         run: |
           python3 - <<'PY'
           import os, time, requests, re
@@ -85,6 +88,9 @@ jobs:
       - name: curl 12MB throughput curve
         env:
           EUDIC_COOKIE: ${{ secrets.EUDIC_COOKIE }}
+          EUDIC_USER: ${{ secrets.EUDIC_USER }}
+          EUDIC_PASS: ${{ secrets.EUDIC_PASS }}
+          GH_PAT: ${{ secrets.GH_PAT }}
         run: |
           python3 -c "
           import sys

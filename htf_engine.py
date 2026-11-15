@@ -278,6 +278,163 @@ def post_article(cid, mid, title, lrc, desc, thumb_fid, intros=""):
     return False
 
 
+# ─────────────────────────── AI subtitle + login helpers ───────────────────────────
+AI_RE = re.compile(r"\[\d{2}:\d{2}:\d{2}[.,]\d{1,3}\]\[\d{2}:\d{2}:\d{2}[.,]\d{1,3}\]")
+SUB_SOURCE = os.environ.get("HTF_SUB_SOURCE", "official-or-ai")   # | podscripts
+AI_WAIT = int(os.environ.get("HTF_AI_WAIT", "900"))               # seconds to poll AI gen
+
+
+def strip_ts(line):
+    return re.sub(r"(\[[^\]]*\])+", "", line).strip()
+
+
+def batch_ai_subtitle(cid, mids):
+    """Queue eudic AI subtitles (server-side generation; ~≤60 min audio each)."""
+    r = req("POST", f"{EUDIC}/ting/BatchAiSubtitle",
+            data={"mediaIds": mids, "channelId": cid}, timeout=60)
+    out = (r.text or "")[:200]
+    long_60 = "60" in out and "无法创建" in out
+    log(f"  BatchAiSubtitle {len(mids)} → {r.status_code} {out[:120]}")
+    return long_60
+
+
+def batch_highlight(cid, mids):
+    r = req("POST", f"{EUDIC}/ting/BatchHighlightSubtitle",
+            data={"mediaIds": mids, "channelId": cid}, timeout=60)
+    log(f"  BatchHighlightSubtitle {len(mids)} → {r.status_code} {(r.text or '')[:100]}")
+
+
+def official_transcript_lines(url):
+    """Parse an official transcript file (RSS podcast:transcript) to plain
+    sentence lines. SRT/VTT → drop cue lines; JSON → segment text; else treat
+    as plain text. Returns [] when unusable."""
+    try:
+        r = requests.get(url, headers=UA, timeout=60)
+        txt = r.text or ""
+        if url.lower().endswith(".json") or txt.lstrip()[:1] in "{[":
+            try:
+                j = json.loads(txt)
+                segs = (j.get("segments") or j.get("transcript") or
+                        j.get("subtitles") or [])
+                out = []
+                for s in segs:
+                    if isinstance(s, dict):
+                        for k in ("text", "body", "content"):
+                            if s.get(k):
+                                out.append(str(s[k]).strip())
+                                break
+                    elif isinstance(s, str) and s.strip():
+                        out.append(s.strip())
+                return [x for x in out if x]
+            except Exception:
+                pass
+        out = []
+        for ln in txt.splitlines():
+            ln = ln.strip()
+            if not ln or re.match(r"^\d+$", ln) or ln.upper().startswith(("WEBVTT", "NOTE", "HEADER")):
+                continue
+            ln = re.sub(r"^\[[^\]]*\]", "", ln)              # [00:00:00]
+            ln = re.sub(r"^\d{2}:\d{2}(:\d{2})?[.,]\d*\s*-->\s*\S+\s*$", "", ln)
+            ln = re.sub(r"<[^>]+>", "", ln).strip()
+            if ln and not re.match(r"^\d{2}:\d{2}", ln):
+                out.append(ln)
+        return out
+    except Exception as e:
+        log(f"  official transcript fetch err: {str(e)[:70]}")
+        return []
+
+
+def find_created_mids(cid, full_title, nparts=1):
+    """Title-lookup with list-lag retries → list of mids in part order."""
+    for attempt in range(4):
+        arts = list_articles(cid)
+        mids = []
+        for i in range(1, nparts + 1):
+            t = full_title if nparts == 1 else f"{full_title}（{i}/{nparts}）"
+            hit = next((k for k in arts if norm_title(k) == norm_title(t)), None)
+            if hit and arts[hit]:
+                mids.append(arts[hit])
+        if len(mids) == nparts:
+            return mids
+        time.sleep(25 * (attempt + 1))
+    return mids if mids else []
+
+
+def eudic_login(user, pwd):
+    """Password login → raw Cookie header for my.eudic.net (the auto-refresh
+    path). Verified against GetPrivateChannels before returning."""
+    s = requests.Session()
+    s.headers.update({**UA, "Referer": "https://dict.eudic.net/account/login"})
+    lp = s.get("https://dict.eudic.net/account/login",
+               params={"returnUrl": "http://my.eudic.net/Account/Login"}, timeout=45)
+    if "input-username" not in lp.text:
+        raise RuntimeError(f"login page unexpected: HTTP {lp.status_code}")
+    r = s.post("https://dict.eudic.net/Account/Login",
+               params={"returnUrl": "http://my.eudic.net/Account/Login"},
+               data={"UserName": user, "Password": pwd, "returnUrl":
+                     "http://my.eudic.net/Account/Login", "RememberMe": "true"},
+               timeout=45, allow_redirects=True)
+    ck = {}
+    for c in s.cookies:
+        if c.domain.endswith(("eudic.net", ".eudic.net")) and c.name not in (
+                "__cf_bm", "cf_clearance", "__cf_chl"):
+            ck[c.name] = c.value
+    raw = "; ".join(f"{k}={v}" for k, v in sorted(ck.items()))
+    if not raw or "EudicWebSession" not in raw:
+        raise RuntimeError(f"login did not yield a session cookie "
+                           f"(HTTP {r.status_code}; url={r.url[:80]})")
+    check = requests.get(f"{EUDIC}/ting/GetPrivateChannels",
+                         headers={"Cookie": raw, "X-Requested-With": "XMLHttpRequest",
+                                  "Referer": f"{EUDIC}/ting/index", **UA}, timeout=45)
+    if check.status_code != 200 or "UploadedChannels" not in check.text:
+        raise RuntimeError(f"cookie verify failed: HTTP {check.status_code}")
+    return raw
+
+
+def update_cookie_secret(raw):
+    """Write the refreshed cookie back into the repo secret EUDIC_COOKIE
+    (needs GH_PAT with Secrets:write)."""
+    pat, repo = os.environ.get("GH_PAT", ""), os.environ.get("GH_REPO",
+                                                              "b921603/htf-sync")
+    if not pat:
+        log("  GH_PAT missing — secret not updated (cookie valid for this run only)")
+        return False
+    from nacl import encoding, public as _pub
+    import base64 as _b64
+    pk = requests.get(f"https://api.github.com/repos/{repo}/actions/secrets/public-key",
+                      headers={"Authorization": f"Bearer {pat}"}, timeout=30).json()
+    box = _pub.SealedBox(_pub.PublicKey(pk["key"].encode(), encoding.Base64Encoder()))
+    enc = box.encrypt(raw.encode())
+    r = requests.put(f"https://api.github.com/repos/{repo}/actions/secrets/EUDIC_COOKIE",
+                     headers={"Authorization": f"Bearer {pat}"},
+                     json={"encrypted_value": _b64.b64encode(enc).decode(),
+                           "key_id": pk["key_id"]}, timeout=30)
+    log(f"  secret EUDIC_COOKIE updated → {r.status_code}")
+    return r.status_code in (201, 204)
+
+
+def auto_relogin():
+    """Cookie expired → password re-login (EUDIC_USER/EUDIC_PASS), then patch
+    this run's session and the repo secret. True = continue working."""
+    u, p = os.environ.get("EUDIC_USER", ""), os.environ.get("EUDIC_PASS", "")
+    if not u or not p:
+        return False
+    log("auth failed — attempting password re-login …")
+    try:
+        raw = eudic_login(u, p)
+        SES.headers["Cookie"] = raw
+        try:
+            update_cookie_secret(raw)
+        except Exception as e:
+            log(f"  secret update err: {str(e)[:70]}")
+        ntfy("HTF GA: cookie auto-refreshed",
+             "🔄 cookie 過期已由帳號密碼自動重新登入修復，同步繼續。", 3)
+        return True
+    except Exception as e:
+        log(f"  re-login failed: {str(e)[:120]}")
+        return False
+
+
 # ─────────────────────────── sources ───────────────────────────
 def rss_items():
     """[{title,guid,ts,date,url,image,desc}] oldest-first."""
@@ -294,6 +451,7 @@ def rss_items():
             continue
         enc = re.search(r'<enclosure[^>]*url="([^"]+)"', block)
         img = re.search(r'<itunes:image[^>]*href="([^"]+)"', block)
+        tr = re.search(r'<podcast:transcript[^>]*url="([^"]+)"', block)
         pub = g("pubDate")
         try:
             import email.utils
@@ -304,6 +462,7 @@ def rss_items():
                       "date": time.strftime("%Y-%m-%d", time.gmtime(ts)) if ts else "",
                       "url": enc.group(1) if enc else "",
                       "image": img.group(1) if img else "",
+                      "transcript": tr.group(1) if tr else "",
                       "desc": g("description")})
     items.sort(key=lambda e: e["ts"] or 0)
     return items
@@ -645,6 +804,23 @@ def job_auth():
     return cid
 
 
+def job_login():
+    """Manual/first-time password login: verifies, patches this run's session,
+    and updates the repo secret EUDIC_COOKIE (needs GH_PAT)."""
+    raw = eudic_login(os.environ.get("EUDIC_USER", ""),
+                      os.environ.get("EUDIC_PASS", ""))
+    SES.headers["Cookie"] = raw
+    updated = False
+    try:
+        updated = update_cookie_secret(raw)
+    except Exception as e:
+        log(f"  secret update err: {str(e)[:80]}")
+    cid = channel_cid()
+    log(f"✓ login OK ｜ articles {len(list_articles(cid))} ｜ secret updated={updated}")
+    ntfy("HTF GA: login OK",
+         f"🔑 帳號密碼登入成功，secret {'已更新' if updated else '未更新（無 GH_PAT）'}。", 3)
+
+
 # ─────────────────────────── job: sync ───────────────────────────
 def job_sync(force="", dry=False, newest=False):
     cid = channel_cid()
@@ -681,11 +857,22 @@ def job_sync(force="", dry=False, newest=False):
         todo.reverse()
     log(f"RSS {len(items)} ｜ done {len(done)} ｜ todo {len(todo)}")
     omap = official_map()
+    slugs = None            # podscripts index — lazily fetched (legacy mode only)
     rc = rj(art_path("rotate_cache.json"), {})
     for e in todo:
         title = e["title"]
         log(f"▶ {title[:70]}")
-        lines, slug = transcript(title, slugs)
+        lines, slug, official = [], "", ""
+        if SUB_SOURCE == "podscripts":
+            slugs = slugs or ps_slugs()
+            lines, slug = transcript(title, slugs)
+        elif e.get("transcript"):
+            official = e["transcript"]
+            lines = official_transcript_lines(official)
+            if len(lines) < 5:                     # unusable file → AI path
+                lines, official, slug = [], "", ""
+            else:
+                slug = "official"
         key = re.sub(r"[^A-Za-z0-9]+", "_", e["guid"])[:40] or str(int(e["ts"]))
         parts = prep_audio(e["url"], key)
         if not parts:
@@ -747,21 +934,80 @@ def job_sync(force="", dry=False, newest=False):
             ok_all = ok_all and okp
             log(f"  ✔ part {i+1}/{len(parts)} create={'OK' if okp else 'FAIL'}")
         if dry:
-            log(f"  【dry】summary: {len(parts)} parts ｜ "
-                f"subtitle={'transcript '+str(len(lines)) if lines else 'AI fallback'}")
+            src = ("official 字幕檔" if official else
+                   f"podscripts {len(lines)} 句" if lines else "歐路 AI 字幕（政策）")
+            log(f"  【dry】summary: {len(parts)} parts ｜ subtitle={src}")
             continue
-        if ok_all:
-            done[e["guid"]] = {"title": f"{date} {title}".strip(),
-                               "at": time.strftime("%F %T"),
-                               "how": "transcript" if lines else "ai"}
+        full_title = f"{date} {title}".strip()
+        if ok_all and not lines:
+            # ── AI path (2026-11-15 policy: official file > eudic AI; no
+            #    third-party transcripts). Create already ran with
+            #    needAISubtitle=true + empty lrc → queue AI server-side, poll,
+            #    enrich desc from AI text, re-post byte-identical, highlight.
+            mids = find_created_mids(cid, full_title, len(parts))
+            long60, lrc_ok = False, False
+            if mids:
+                long60 = batch_ai_subtitle(cid, mids)
+            stage = "queued"
+            if long60 or not mids:
+                stage = "unsupported" if long60 else "no-mids"
+            else:
+                t0 = time.time()
+                infos = []
+                while time.time() - t0 < AI_WAIT:
+                    infos = []
+                    for mid in mids:
+                        stt, txt = get_edit_page(cid, mid)
+                        infos.append(parse_edit_page(txt)
+                                     if stt == 200 and txt else {})
+                        time.sleep(1)
+                    if all(AI_RE.search((i.get("lrc") or "")) for i in infos):
+                        lrc_ok = True
+                        break
+                    time.sleep(30)
+                if lrc_ok:
+                    stage = "highlighted"
+                    for mid, info in zip(mids, infos):
+                        lrc = info["lrc"]
+                        if MARK not in (info["desc"] or ""):
+                            text = "\n".join(strip_ts(b) for b in lrc.splitlines())
+                            nd = compose_desc(full_title, text, e["desc"])
+                            post_article(cid, mid, info["title"] or full_title,
+                                         lrc, nd, info["thumb_fid"], info["intros"])
+                        batch_highlight(cid, [mid])
+                        time.sleep(2)
+                    guard_inline(cid, title, [], "")
+            done[e["guid"]] = {"title": full_title, "at": time.strftime("%F %T"),
+                               "how": "ai", "ai_stage": stage, "mids": mids,
+                               "ai_queued": bool(mids and not long60),
+                               "rss_desc": (e["desc"] or "")[:500]}
             wj(art_path("done.json"), done)
             ledger_append({"ts": time.strftime("%F %T"), "title": title,
-                           "how": "transcript" if lines else "AI字幕",
+                           "how": "AI字幕" + ("＋高亮" if lrc_ok else "(排程中)"),
+                           "parts": len(parts), "desc_len": len(desc)})
+            sub = ("歐路 AI 字幕已生成＋高亮＋導讀" if stage == "highlighted" else
+                   "歐路 AI 字幕排程中（小時任務會自動完成導讀＋高亮）"
+                   if stage == "queued" else
+                   "⚠️ 超過 60 分鐘且無官方字幕檔 → 本集無字幕（誠實標注）")
+            ntfy("HTF GA: new episode",
+                 f"🆕 新集已同步：《{title[:64]}》\n🎙 字幕：{sub}\n"
+                 "🖼 封面：官方圖已套用＋已加入輪換守恆\n"
+                 "🎧 歐路 App → 聽力 → 頻道「How To Fail With Elizabeth Day」")
+            time.sleep(3)
+            continue
+        if ok_all:
+            done[e["guid"]] = {"title": full_title,
+                               "at": time.strftime("%F %T"),
+                               "how": "official" if official else "transcript"}
+            wj(art_path("done.json"), done)
+            ledger_append({"ts": time.strftime("%F %T"), "title": title,
+                           "how": "official" if official else "transcript",
                            "lrc_lines": len(lines), "desc_len": len(desc),
                            "slug": slug, "parts": len(parts)})
             # inline guard: verify + repair + register for rotation
             guard_inline(cid, title, lines, slug)
-            sub = f"podscripts 逐字稿 {len(lines)} 句" if lines else "歐路 AI 字幕"
+            sub = (f"官方字幕檔 {len(lines)} 句" if official else
+                   f"podscripts 逐字稿 {len(lines)} 句")
             ntfy("HTF GA: new episode",
                  f"🆕 新集已同步並通過驗收：《{title[:64]}》\n"
                  f"🎙 字幕：{sub}\n🖼 封面：官方圖已套用＋已加入輪換守恆\n"
@@ -823,6 +1069,73 @@ def guard_inline(cid, title, lines, slug):
                               if norm_title(e["title"]) == norm_title(title)), "")}
     wj(art_path("rotate_cache.json"), rc)
     log(f"  guard: registered ｜ rotate_cache={len(rc)}")
+
+
+# ─────────────────────────── job: subsync ───────────────────────────
+def job_subsync():
+    """Hourly AI-subtitle finishing queue (2026-11-15 policy). For episodes
+    created via the AI path: retry title lookup, (re)queue AI when lrc is
+    still empty, and when the server-side AI lrc is ready → enrich desc from
+    the AI text → re-post byte-identical → highlight → register rotation."""
+    cid = channel_cid()
+    done = rj(art_path("done.json"), {})
+    changed = False
+    for guid, rec in list(done.items()):
+        if rec.get("how") != "ai" or rec.get("ai_stage") in (
+                "highlighted", "unsupported", "failed"):
+            continue
+        title = rec.get("title", "")
+        mids = rec.get("mids") or []
+        if not mids:
+            mids = find_created_mids(cid, title, 1)
+            if mids:
+                rec["mids"] = mids
+                changed = True
+            else:
+                continue
+        ready, waitq = [], []
+        for mid in mids:
+            stt, txt = get_edit_page(cid, mid)
+            info = parse_edit_page(txt) if stt == 200 and txt else {}
+            lrc = info.get("lrc", "")
+            (ready if AI_RE.search(lrc) else waitq).append((mid, info, lrc))
+            time.sleep(1)
+        if waitq and any(not lrc.strip() for _m, _i, lrc in waitq):
+            if not rec.get("ai_queued"):
+                if batch_ai_subtitle(cid, [m for m, _i, lrc in waitq
+                                           if not lrc.strip()]):
+                    rec["ai_stage"] = "unsupported"
+                    changed = True
+                    continue
+                rec["ai_queued"] = True
+                changed = True
+            rec["ai_tries"] = rec.get("ai_tries", 0) + 1
+            if rec["ai_tries"] >= 4:
+                rec["ai_stage"] = "failed"
+                changed = True
+                ntfy("HTF GA: AI subtitle failed",
+                     f"⚠️ AI 字幕 4 輪未就緒（可能超長或不支援）：《{title[:60]}》\n"
+                     "本集無字幕（誠實標注）；如需字幕請回覆訊息指定處理方式。", 3)
+        for mid, info, lrc in ready:
+            if mid in (rec.get("hl_mids") or []):
+                continue
+            if MARK not in (info["desc"] or ""):
+                text = "\n".join(strip_ts(b) for b in lrc.splitlines())
+                nd = compose_desc(title, text, rec.get("rss_desc", ""))
+                post_article(cid, mid, info["title"] or title,
+                             lrc, nd, info["thumb_fid"], info["intros"])
+            batch_highlight(cid, [mid])
+            rec.setdefault("hl_mids", []).append(mid)
+            changed = True
+        if len(rec.get("hl_mids") or []) == len(mids):
+            rec["ai_stage"] = "highlighted"
+            changed = True
+            guard_inline(cid, title, [], "")
+            ntfy("HTF GA: AI subtitle done",
+                 f"✅ AI 字幕＋高亮＋導讀完成：《{title[:60]}》", 3)
+    if changed:
+        wj(art_path("done.json"), done)
+    log("subsync pass done")
 
 
 # ─────────────────────────── job: bootstrap ───────────────────────────
@@ -1048,24 +1361,34 @@ def main():
     sp = sub.add_parser("keepalive")
     sp = sub.add_parser("audit")
     sp.add_argument("--limit", type=int, default=0)
+    sp = sub.add_parser("subsync")
+    sp = sub.add_parser("login")
     a = ap.parse_args()
     t0 = time.time()
+    DISPATCH = {
+        "auth": lambda: job_auth(),
+        "sync": lambda: job_sync(force=a.force, dry=a.dry_run, newest=a.newest),
+        "bootstrap": lambda: job_bootstrap(a.limit),
+        "rotate": lambda: job_rotate(a.shard, a.budget or None),
+        "keepalive": lambda: job_keepalive(),
+        "audit": lambda: job_audit(a.limit),
+        "subsync": lambda: job_subsync(),
+        "login": lambda: job_login(),
+    }
     try:
-        if a.cmd == "auth":
-            job_auth()
-        elif a.cmd == "sync":
-            job_sync(force=a.force, dry=a.dry_run, newest=a.newest)
-        elif a.cmd == "bootstrap":
-            job_bootstrap(a.limit)
-        elif a.cmd == "rotate":
-            job_rotate(a.shard, a.budget or None)
-        elif a.cmd == "keepalive":
-            job_keepalive()
-        elif a.cmd == "audit":
-            job_audit(a.limit)
+        DISPATCH[a.cmd]()
     except AuthError as e:
-        ntfy("HTF GA: cookie expired", f"⚠️ {e}\n請提供新 cookie 給 agent 更新 secret。", 5)
-        sys.exit(2)
+        if auto_relogin():
+            try:
+                DISPATCH[a.cmd]()
+            except AuthError as e2:
+                ntfy("HTF GA: cookie expired",
+                     f"⚠️ {e2}\n自動重新登入也失敗——請檢查帳密或提供新 cookie。", 5)
+                sys.exit(2)
+        else:
+            ntfy("HTF GA: cookie expired",
+                 f"⚠️ {e}\n請提供新 cookie 或設定 EUDIC_USER/EUDIC_PASS 以啟用自動重登。", 5)
+            sys.exit(2)
     log(f"== {a.cmd} finished in {time.time()-t0:.0f}s ==")
 
 

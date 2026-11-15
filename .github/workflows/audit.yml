@@ -25,6 +25,9 @@ jobs:
       - run: python3 htf_engine.py audit
         env:
           EUDIC_COOKIE: ${{ secrets.EUDIC_COOKIE }}
+          EUDIC_USER: ${{ secrets.EUDIC_USER }}
+          EUDIC_PASS: ${{ secrets.EUDIC_PASS }}
+          GH_PAT: ${{ secrets.GH_PAT }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           HTF_BASE: ${{ github.workspace }}/state
       - uses: actions/cache/save@v4

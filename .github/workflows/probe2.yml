@@ -18,6 +18,9 @@ jobs:
       - name: write probes
         env:
           EUDIC_COOKIE: ${{ secrets.EUDIC_COOKIE }}
+          EUDIC_USER: ${{ secrets.EUDIC_USER }}
+          EUDIC_PASS: ${{ secrets.EUDIC_PASS }}
+          GH_PAT: ${{ secrets.GH_PAT }}
         run: |
           python3 - <<'PY'
           import os, time, requests
