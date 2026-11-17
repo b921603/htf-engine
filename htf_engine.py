@@ -54,6 +54,7 @@ os.makedirs(BASE, exist_ok=True)
 os.makedirs(ROTDIR, exist_ok=True)
 
 NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "").strip()
+NTFY_PROGRESS_TOPIC = os.environ.get("NTFY_PROGRESS_TOPIC", "").strip()
 
 FINE_TS = re.compile(r"^\d{1,2}:\d{2}([.:]\d{1,3})?$")    # bare "00:00" chips
 PS_RE = re.compile(r'data-seconds="(\d+)"[^>]*>(.*?)</span>', re.S)
@@ -64,16 +65,18 @@ def log(*a):
     print(f"[{time.strftime('%F %T')}] {s}", flush=True)
 
 
-def ntfy(title, body, prio=3):
-    if not NTFY_TOPIC:
+def ntfy(title, body, prio=3, progress=False):
+    """progress=True → high-volume progress lane (NTFY_PROGRESS_TOPIC)."""
+    topic = NTFY_PROGRESS_TOPIC if (progress and NTFY_PROGRESS_TOPIC) else NTFY_TOPIC
+    if not topic:
         log("(ntfy disabled — no topic)")
         return
     try:
         requests.post("https://ntfy.sh/", timeout=30, data=json.dumps({
-            "topic": NTFY_TOPIC, "title": title[:80], "message": body,
+            "topic": topic, "title": title[:80], "message": body,
             "priority": prio, "tags": ["robot"]}).encode(),
             headers={"Content-Type": "application/json"})
-        log(f"→ ntfy: {title}")
+        log(f"→ ntfy[{topic.split('-')[0]}]: {title}")
     except Exception as e:
         log(f"ntfy err: {str(e)[:80]}")
 
@@ -992,7 +995,7 @@ def job_sync(force="", dry=False, newest=False):
             ntfy("HTF GA: new episode",
                  f"🆕 新集已同步：《{title[:64]}》\n🎙 字幕：{sub}\n"
                  "🖼 封面：官方圖已套用＋已加入輪換守恆\n"
-                 "🎧 歐路 App → 聽力 → 頻道「How To Fail With Elizabeth Day」")
+                 "🎧 歐路 App → 聽力 → 頻道「How To Fail With Elizabeth Day」", progress=True)
             time.sleep(3)
             continue
         if ok_all:
@@ -1011,7 +1014,7 @@ def job_sync(force="", dry=False, newest=False):
             ntfy("HTF GA: new episode",
                  f"🆕 新集已同步並通過驗收：《{title[:64]}》\n"
                  f"🎙 字幕：{sub}\n🖼 封面：官方圖已套用＋已加入輪換守恆\n"
-                 "🎧 歐路 App → 聽力 → 頻道「How To Fail With Elizabeth Day」")
+                 "🎧 歐路 App → 聽力 → 頻道「How To Fail With Elizabeth Day」", progress=True)
         else:
             ledger_append({"ts": time.strftime("%F %T"), "title": title,
                            "how": "create-failed"})
@@ -1132,7 +1135,7 @@ def job_subsync():
             changed = True
             guard_inline(cid, title, [], "")
             ntfy("HTF GA: AI subtitle done",
-                 f"✅ AI 字幕＋高亮＋導讀完成：《{title[:60]}》", 3)
+                 f"✅ AI 字幕＋高亮＋導讀完成：《{title[:60]}》", 3, progress=True)
     if changed:
         wj(art_path("done.json"), done)
     log("subsync pass done")
