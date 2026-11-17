@@ -43,6 +43,7 @@ jobs:
           EUDIC_PASS: ${{ secrets.EUDIC_PASS }}
           GH_PAT: ${{ secrets.GH_PAT }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          NTFY_PROGRESS_TOPIC: ${{ secrets.NTFY_PROGRESS_TOPIC }}
           HTF_BASE: ${{ github.workspace }}/state
           HTF_FORCE: ${{ inputs.force }}
         run: |
@@ -60,6 +61,7 @@ jobs:
           EUDIC_PASS: ${{ secrets.EUDIC_PASS }}
           GH_PAT: ${{ secrets.GH_PAT }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          NTFY_PROGRESS_TOPIC: ${{ secrets.NTFY_PROGRESS_TOPIC }}
           HTF_BASE: ${{ github.workspace }}/state
         run: python3 htf_engine.py subsync
       - name: save state
