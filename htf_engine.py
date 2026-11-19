@@ -158,9 +158,78 @@ def channel_cid():
     j = r.json()
     chs = j["channelList"]["UploadedChannels"]
     for c in chs:
-        if CHANNEL_NAME in html.unescape(c["Name"]):
+        if c.get("ItemType") != 7 and CHANNEL_NAME in html.unescape(c["Name"]):
             return c["Id"]
     raise RuntimeError(f"channel '{CHANNEL_NAME}' not found — check the cookie account")
+
+SPECIALS_NAME = "How To Fail - Specials"
+SPECIAL_RE = re.compile(r"History'?s Greatest Fails|BONUS EPISODE|MID-?SEASON BONUS"
+                        r"|BETWEEN SEASON BONUS|TWIXMAS BONUS|SPECIAL EPISODE|TRAILER"
+                        r"|Introducing |Best Friend Therapy|How To Fail x "
+                        r"|How To Write a Book|How To Date", re.I)
+_SP = {"cid": ""}
+
+def specials_cid():
+    """Find (or create once) the specials channel; cached per process."""
+    if _SP["cid"]:
+        return _SP["cid"]
+    chs = (req("GET", f"{EUDIC}/ting/GetPrivateChannels", timeout=45)
+           .json()["channelList"]["UploadedChannels"])
+    for c in chs:
+        if c.get("ItemType") != 7 and html.unescape(c["Name"]) == SPECIALS_NAME:
+            _SP["cid"] = c["Id"]
+            return _SP["cid"]
+    r = req("POST", f"{EUDIC}/ting/CreatePrivateChannel",
+            data={"name": SPECIALS_NAME, "thumb": "", "channelType": "",
+                  "description": "How To Fail With Elizabeth Day 特別篇"
+                                 "（History's Greatest Fails、Bonus、衍生節目等）"},
+            timeout=45)
+    log(f"  specials channel create: {r.status_code} {(r.text or '')[:60]}")
+    time.sleep(3)
+    for c in (req("GET", f"{EUDIC}/ting/GetPrivateChannels", timeout=45)
+              .json()["channelList"]["UploadedChannels"]):
+        if c.get("ItemType") != 7 and html.unescape(c["Name"]) == SPECIALS_NAME:
+            _SP["cid"] = c["Id"]
+            return _SP["cid"]
+    return ""
+
+def raw_rows(cid):
+    """[(title, mid)] in display order (sortby=0 pagination), dup-safe."""
+    out, seen = [], set()
+    for pg in range(24):
+        r = req("GET", f"{EUDIC}/ting/GetPrivateMedias"
+                       f"?sortby=0&page={pg}&channelId={cid}", timeout=45)
+        if not r.text:
+            break
+        got = 0
+        for x in re.split(r'<div class="dragBox">', r.text)[1:]:
+            tm = re.search(r'rl-title"[^>]*title="([^"]*)"', x)
+            mid = re.search(r'media_id"[^>]*data="([^"]+)"', x)
+            if tm and mid and mid.group(1) not in seen:
+                seen.add(mid.group(1))
+                out.append((html.unescape(tm.group(1)), mid.group(1)))
+                got += 1
+        if not got:
+            break
+    return out
+
+def enforce_order(cid, label=""):
+    """Display order = newest first (title date prefix DESC). POST only on diff."""
+    try:
+        rows = raw_rows(cid)
+        def _dkey(t):
+            m = re.match(r"(\d{4})-(\d{2})-(\d{2})", t)
+            return -(int(m.group(1)) * 10000 + int(m.group(2)) * 100
+                     + int(m.group(3))) if m else 99999999
+        want = [m for t, m in sorted(rows, key=lambda r: _dkey(r[0]))]
+        have = [m for _t, m in rows]
+        if want != have and want:
+            r = req("POST", f"{EUDIC}/ting/OrderPriveteMedia",
+                    data=[("channelId", cid)] + [("mediaIds", m) for m in want],
+                    timeout=120)
+            log(f"  ↕ order fix {label or cid[:8]}: {len(want)} 篇 → {(r.text or '')[:40]}")
+    except Exception as ex:
+        log(f"  order fix err ({label}): {str(ex)[:70]}")
 
 
 def list_articles(cid):
@@ -665,7 +734,7 @@ def ffpath():
     if not p:
         p = ff_bootstrap()
     if not p:
-        sys.exit("✗ ffmpeg not found and bootstrap download failed")
+        raise RuntimeError("ffmpeg not found and bootstrap download failed")
     return p
 
 
@@ -682,15 +751,16 @@ def ff_bootstrap():
         log("ffmpeg missing — fetching static build …")
         d = os.path.dirname(tgt)
         os.makedirs(d, exist_ok=True)
-        t0 = os.path.join(d, "ff.tar.xz")
+        t0 = os.path.join(d, f"ff-{threading.get_ident()}.tar.xz")
         urllib.request.urlretrieve(url, t0)
         with tarfile.open(t0) as tf:
             for m in tf.getmembers():
                 if m.name.endswith("/ffmpeg"):
-                    with open(tgt, "wb") as f:
+                    with open(tgt + ".part", "wb") as f:
                         f.write(tf.extractfile(m).read())
                     break
-        os.chmod(tgt, 0o755)
+        os.chmod(tgt + ".part", 0o755)
+        os.replace(tgt + ".part", tgt)      # atomic publish
         log(f"ffmpeg ready: {tgt}")
         return tgt
     except Exception as e:
@@ -826,7 +896,7 @@ def job_login():
 
 # ─────────────────────────── job: sync ───────────────────────────
 def job_sync(force="", dry=False, newest=False):
-    cid = channel_cid()
+    cid = main_cid = channel_cid()
     slugs = ps_slugs()
     items = rss_items()
     done = rj(art_path("done.json"), None)
@@ -842,6 +912,10 @@ def job_sync(force="", dry=False, newest=False):
     ct = rj(art_path("ct_cache.json"), {"ts": 0, "titles": []})
     if time.time() - ct.get("ts", 0) > 1800:
         arts = list_articles(cid)
+        try:                                   # specials live in their own
+            arts.update(list_articles(specials_cid()))   #   channel — count as have
+        except Exception:
+            pass
         ct = {"ts": time.time(), "titles": sorted(arts)}
         wj(art_path("ct_cache.json"), ct)
     have_norms = {norm_title(t) for t in ct["titles"]}
@@ -864,6 +938,11 @@ def job_sync(force="", dry=False, newest=False):
     rc = rj(art_path("rotate_cache.json"), {})
     for e in todo:
         title = e["title"]
+        _want = specials_cid() if SPECIAL_RE.search(title) else main_cid
+        if _want and cid != _want:
+            cid = _want
+            if _want != main_cid:
+                log(f"  ↳ special → {SPECIALS_NAME}")
         log(f"▶ {title[:70]}")
         lines, slug, official = [], "", ""
         if SUB_SOURCE == "podscripts":
@@ -1022,6 +1101,13 @@ def job_sync(force="", dry=False, newest=False):
                  "（部分段落失敗）——將於下一輪由頻道清單複核", 4)
         time.sleep(3)
     wj(art_path("rotate_cache.json"), rc)
+    enforce_order(main_cid, "main")
+    try:
+        _sc = specials_cid()
+        if _sc:
+            enforce_order(_sc, "specials")
+    except Exception:
+        pass
     log("sync done")
 
 
@@ -1080,7 +1166,7 @@ def job_subsync():
     created via the AI path: retry title lookup, (re)queue AI when lrc is
     still empty, and when the server-side AI lrc is ready → enrich desc from
     the AI text → re-post byte-identical → highlight → register rotation."""
-    cid = channel_cid()
+    cid = main_cid = channel_cid()
     done = rj(art_path("done.json"), {})
     changed = False
     for guid, rec in list(done.items()):
@@ -1088,6 +1174,9 @@ def job_subsync():
                 "highlighted", "unsupported", "failed"):
             continue
         title = rec.get("title", "")
+        _want = specials_cid() if SPECIAL_RE.search(title) else main_cid
+        if _want and cid != _want:
+            cid = _want
         mids = rec.get("mids") or []
         if not mids:
             mids = find_created_mids(cid, title, 1)
