@@ -4,6 +4,7 @@ name: htf-sync
 on:
   schedule:
     - cron: "23 * * * *"      # hourly (GitHub cron drifts a few minutes — fine)
+    - cron: "53 * * * *"      # second tick: GitHub drops scheduled runs under load — two chances per hour, concurrency dedupes
   workflow_dispatch:
     inputs:
       force:
