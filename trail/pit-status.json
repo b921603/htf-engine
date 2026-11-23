@@ -1,0 +1,53 @@
+{
+ "protocol": "pit-status/1",
+ "family": "htf",
+ "updated_at": "2026-11-23T03:25:12Z",
+ "mode": "backlog+specials-split",
+ "official_total": 413,
+ "official_available": 413,
+ "completed_eps": 0,
+ "true_missing": 413,
+ "completion": 0.0,
+ "status": "in_progress",
+ "follow_lag_days": null,
+ "blocked_reason": "official dead links 0 eps (no enclosure, unfixable)",
+ "subs": {
+  "main": {
+   "total": 369,
+   "done": 0,
+   "dead": 0,
+   "missing": 369,
+   "missing_sample": [
+    "Laura Kuenssberg - The abuse is awful, but I have a job to d",
+    "Sue Perkins - “My Late ADHD Diagnosis Changed My Life” ",
+    "Greg Wise - ‘Therapy Saved My Life. And My Marriage.’",
+    "Hanif Kureishi - ‘I Write To Stay Alive’ ",
+    "Bill Bailey - ‘Rejection Made Me A Better Performer’ ",
+    "Bella Mackie - ‘I Will Never “Fix” My Mental Health’",
+    "Anthony Scaramucci - My Biggest Failure? Working For Donald ",
+    "Luke Evans, Sarah Solemani & Elizabeth Day: The Making of Th",
+    "Bonnie Garmus - ‘Adoption Gave Us A Family’",
+    "Russell T Davies - On Dr Who, Grief and Gay Representation o"
+   ]
+  },
+  "specials": {
+   "total": 44,
+   "done": 0,
+   "dead": 0,
+   "missing": 44,
+   "missing_sample": [
+    "How To Date: BONUS EPISODE - Your dating questions answered…",
+    "S18 BONUS EPISODE: Georgia Harrison on taking back her power",
+    "S18 MIDSEASON BONUS! Captain Sandy from Below Deck on surviv",
+    "S17, BONUS EPISODE: Lucy Spraggan on survival, sobriety and ",
+    "S17 BONUS EPISODE! Dan Carter: one of the greatest rugby pla",
+    "S17 BONUS EPISODE: Rachel Cargle on reimagining the life we ",
+    "BONUS EPISODE! Mel Schilling: the MAFS dating expert on conf",
+    "BONUS EPISODE! How To Fail x Happy Place: The Ultimate Podca",
+    "S16, BONUS EPISODE! FRIENDAHOLIC: Confessions of a Friendshi",
+    "S16, BONUS EPISODE: Cody Rigsby on queerness, addiction and "
+   ]
+  }
+ },
+ "notes": "dead links excluded from debt per engine policy; follow_lag = newest RSS pub - newest done"
+}
