@@ -3,8 +3,8 @@ name: htf-sync
 # intro/official-cover/create/verify/register-rotation) → ntfy notification.
 on:
   schedule:
-    - cron: "23 * * * *"      # hourly (GitHub cron drifts a few minutes — fine)
-    - cron: "53 * * * *"      # second tick: GitHub drops scheduled runs under load — two chances per hour, concurrency dedupes
+    - cron: "3 * * * *"      # hourly (GitHub cron drifts a few minutes — fine)
+    - cron: "33 * * * *"      # second tick: GitHub drops scheduled runs under load — two chances per hour, concurrency dedupes
   workflow_dispatch:
     inputs:
       force:
