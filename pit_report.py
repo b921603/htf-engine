@@ -95,8 +95,9 @@ def main():
                  for k, v in subs.items()},
         "notes": "dead links excluded from debt per engine policy; follow_lag = newest RSS pub - newest done",
     }
-    os.makedirs("trail", exist_ok=True)
-    json.dump(rep, open("trail/pit-status.json", "w"), ensure_ascii=False, indent=1)
+    trail = os.path.join(BASE, "..", "trail")   # 跟隨 BASE——沙盒測試不污染 repo（11-25 教訓）
+    os.makedirs(trail, exist_ok=True)
+    json.dump(rep, open(os.path.join(trail, "pit-status.json"), "w"), ensure_ascii=False, indent=1)
     print(f"pit-status: {done_total}/{total_fixable} completion={rep['completion']} "
           f"missing={rep['true_missing']} dead={subs['main']['dead'] + subs['specials']['dead']} "
           f"retired={rep['retired_count'] if rep['retired_count'] is not None else '?'} "
