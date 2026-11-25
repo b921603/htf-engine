@@ -1,20 +1,20 @@
 {
  "protocol": "pit-status/1",
  "family": "htf",
- "updated_at": "2026-11-25T04:01:05Z",
+ "updated_at": "2026-11-25T07:07:13Z",
  "mode": "backlog+specials-split",
- "official_total": 413,
- "official_available": 413,
- "completed_eps": 413,
+ "official_total": 414,
+ "official_available": 414,
+ "completed_eps": 414,
  "true_missing": 0,
  "completion": 1.0,
  "status": "complete",
- "follow_lag_days": -0.7,
+ "follow_lag_days": -0.1,
  "blocked_reason": "official dead links 0 eps (no enclosure, unfixable)",
  "subs": {
   "main": {
-   "total": 369,
-   "done": 369,
+   "total": 370,
+   "done": 370,
    "dead": 0,
    "missing": 0,
    "missing_sample": []
