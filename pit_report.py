@@ -40,6 +40,7 @@ def main():
     feed = requests.get(RSS, headers=UA, timeout=90)
     subs = {"main": {"total": 0, "done": 0, "dead": 0, "missing": []},
             "specials": {"total": 0, "done": 0, "dead": 0, "missing": []}}
+    rss_guids = set()
     for block in re.findall(r"<item>(.*?)</item>", feed.text or "", re.S):
         t = re.search(r"<title>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?</title>", block, re.S)
         g = re.search(r"<guid[^>]*>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?</guid>", block, re.S)
@@ -55,6 +56,7 @@ def main():
             pass
         sub = subs["specials"] if SPECIAL_RE.search(html.unescape(t.group(1))) else subs["main"]
         sub["total"] += 1
+        rss_guids.add(g.group(1).strip())
         if g.group(1).strip() in done_keys:
             sub["done"] += 1
         elif not enc:
@@ -62,6 +64,11 @@ def main():
         else:
             sub["missing"].append(html.unescape(t.group(1))[:60])
     follow_lag_days = round((latest_pub - latest_done) / 86400, 1) if (latest_pub and latest_done) else None
+    retired, retired_check = None, "ok"
+    if len(rss_guids) < len(done_keys) - 5:
+        retired_check = "inconclusive (feed smaller than ledger — guard)"
+    else:
+        retired = sorted(done_keys - rss_guids)
     fixable_missing = subs["main"]["missing"] + subs["specials"]["missing"]
     total_fixable = (subs["main"]["total"] + subs["specials"]["total"]
                      - subs["main"]["dead"] - subs["specials"]["dead"])
@@ -78,6 +85,10 @@ def main():
         "completion": round(done_total / total_fixable, 3) if total_fixable else None,
         "status": "complete" if not fixable_missing else "in_progress",
         "follow_lag_days": follow_lag_days,
+        "retired_count": len(retired) if retired is not None else None,
+        "retired_sample": [str((done.get(g) or {}).get("title") or g)[:50]
+                           for g in (retired or [])][:10],
+        "retired_check": retired_check,
         "blocked_reason": f"official dead links {subs['main']['dead'] + subs['specials']['dead']} eps (no enclosure, unfixable)",
         "subs": {k: {"total": v["total"], "done": v["done"], "dead": v["dead"],
                      "missing": len(v["missing"]), "missing_sample": v["missing"][:10]}
@@ -88,6 +99,7 @@ def main():
     json.dump(rep, open("trail/pit-status.json", "w"), ensure_ascii=False, indent=1)
     print(f"pit-status: {done_total}/{total_fixable} completion={rep['completion']} "
           f"missing={rep['true_missing']} dead={subs['main']['dead'] + subs['specials']['dead']} "
+          f"retired={rep['retired_count'] if rep['retired_count'] is not None else '?'} "
           f"follow_lag={follow_lag_days}d")
 
 
