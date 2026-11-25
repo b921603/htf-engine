@@ -26,6 +26,7 @@ Honesty policy (non-negotiable, see README):
 import argparse
 import difflib
 import gzip
+import threading
 import html
 import io
 import json
@@ -769,32 +770,65 @@ def ffpath():
 
 def ff_bootstrap():
     """Runner images may lack ffmpeg (ubuntu-26.04 dropped it) — fetch a
-    static build once per run (~40 MB, seconds on runners)."""
+    static build once per run (~40 MB, seconds on runners).
+    2026-11-25: johnvansickle 單源依賴 + threading 未 import 雙雷引爆
+    （runs 45503641471 / 45554983497）→ 鏡像 fallback（對齊 tfs_engine）。"""
     import tarfile, tempfile, urllib.request
     tgt = os.path.join(tempfile.gettempdir(), "htf_ffmpeg", "ffmpeg")
+    t0 = None
     if os.path.isfile(tgt):
         return tgt
-    url = ("https://johnvansickle.com/ffmpeg/releases/"
-           "ffmpeg-release-amd64-static.tar.xz")
     try:
-        log("ffmpeg missing — fetching static build …")
-        d = os.path.dirname(tgt)
-        os.makedirs(d, exist_ok=True)
-        t0 = os.path.join(d, f"ff-{threading.get_ident()}.tar.xz")
-        urllib.request.urlretrieve(url, t0)
-        with tarfile.open(t0) as tf:
-            for m in tf.getmembers():
-                if m.name.endswith("/ffmpeg"):
-                    with open(tgt + ".part", "wb") as f:
-                        f.write(tf.extractfile(m).read())
+        with _FFMPEG_LOCK:                   # two workers raced the same
+            if os.path.isfile(tgt):          #   download once — serialize
+                return tgt                   #   + double-check after wait
+            urls = [("https://johnvansickle.com/ffmpeg/releases/"
+                     "ffmpeg-release-amd64-static.tar.xz", "/ffmpeg"),
+                    ("https://github.com/BtbN/FFmpeg-Builds/releases/download/"
+                     "latest/ffmpeg-master-latest-linux64-gpl.tar.xz",
+                     "/bin/ffmpeg")]         # runner-friendly GitHub mirror
+            d = os.path.dirname(tgt)
+            os.makedirs(d, exist_ok=True)
+            last_err = None
+            for url, bin_suffix in urls:
+                try:
+                    log(f"ffmpeg missing — fetching static build … {url.split('/')[2]}")
+                    t0 = os.path.join(d, f"ff-{threading.get_ident()}.tar.xz")
+                    urllib.request.urlretrieve(url, t0)
+                    found = False
+                    with tarfile.open(t0) as tf:
+                        for m in tf.getmembers():
+                            if m.name.endswith(bin_suffix):
+                                with open(tgt + ".part", "wb") as f:
+                                    f.write(tf.extractfile(m).read())
+                                found = True
+                                break
+                    if not found:
+                        raise RuntimeError("ffmpeg binary not found in tarball")
+                    last_err = None
                     break
-        os.chmod(tgt + ".part", 0o755)
-        os.replace(tgt + ".part", tgt)      # atomic publish
-        log(f"ffmpeg ready: {tgt}")
-        return tgt
+                except Exception as ex:
+                    last_err = ex
+                    log(f"  ffmpeg source failed: {str(ex)[:80]} — trying next mirror")
+                    try:
+                        os.remove(t0)
+                    except Exception:
+                        pass
+            if last_err is not None:
+                raise last_err
+            os.chmod(tgt + ".part", 0o755)
+            os.replace(tgt + ".part", tgt)   # atomic publish
+            log(f"ffmpeg ready: {tgt}")
+            return tgt
     except Exception as e:
         log(f"ffmpeg bootstrap failed: {e}")
         return None
+    finally:
+        try:
+            if t0 and os.path.exists(t0):
+                os.remove(t0)
+        except Exception:
+            pass
 
 
 def shutil_ff():

@@ -37,6 +37,15 @@ jobs:
           path: state
           key: htf-state-${{ github.run_id }}
           restore-keys: htf-state-
+      - name: import smoke test (fail fast on name/syntax breaks)
+        run: |
+          python3 -c "
+          import htf_engine
+          print('smoke OK: module imports clean')"
+          python3 -c "
+          import htf_engine as H
+          assert callable(H.ff_bootstrap) and callable(H.post_article)
+          print('smoke OK: entrypoints present')"
       - name: run sync
         env:
           EUDIC_COOKIE: ${{ secrets.EUDIC_COOKIE }}
