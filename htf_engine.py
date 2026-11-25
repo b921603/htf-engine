@@ -768,6 +768,9 @@ def ffpath():
     return p
 
 
+_FFMPEG_LOCK = threading.Lock()      # serialize concurrent bootstrap downloads
+
+
 def ff_bootstrap():
     """Runner images may lack ffmpeg (ubuntu-26.04 dropped it) — fetch a
     static build once per run (~40 MB, seconds on runners).
